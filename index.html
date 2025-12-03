@@ -1,286 +1,369 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mapa por Supervisão</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mapa por Supervisão</title>
 
-<!-- Leaflet CSS -->
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <!-- Leaflet CSS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
 
-<style>
-    body, html {
-        margin: 0;
-        padding: 0;
-        height: 100%;
-        width: 100%;
-        overflow: hidden;
-        font-family: Arial, sans-serif;
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body,
+    html {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      width: 100%;
+      overflow: hidden;
+      font-family: Arial, sans-serif;
     }
 
     #map {
-        width: 100%;
-        height: 100%;
+      width: 100%;
+      height: 100%;
+      background: #e5e5e5; /* se o mapa não carregar, fica cinza */
     }
 
     /* Legenda Desktop */
     #legend {
-        position: absolute;
-        top: 10px;
-        left: 10px;
-        background: white;
-        padding: 14px;
-        border-radius: 8px;
-        z-index: 9999;
-        max-height: 70vh;
-        overflow-y: auto;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-        font-size: 14px;
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: white;
+      padding: 14px;
+      border-radius: 8px;
+      z-index: 9999;
+      max-height: 70vh;
+      overflow-y: auto;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      font-size: 14px;
+    }
+
+    #legend h3 {
+      margin: 0 0 8px 0;
     }
 
     /* Botão para abrir legenda no celular */
     #legend-toggle {
-        display: none;
-        position: fixed;
-        bottom: 12px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: #2c3e50;
-        color: #fff;
-        border: none;
-        padding: 12px 18px;
-        border-radius: 26px;
-        font-size: 17px;
-        z-index: 99999;
+      display: none;
+      position: fixed;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #2c3e50;
+      color: #fff;
+      border: none;
+      padding: 12px 18px;
+      border-radius: 26px;
+      font-size: 17px;
+      z-index: 99999;
     }
 
     /* Painel mobile */
     #legend-mobile {
-        display: none;
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        background: white;
-        padding: 20px;
-        max-height: 60%;
-        overflow-y: auto;
-        border-radius: 20px 20px 0 0;
-        box-shadow: 0px -6px 14px rgba(0,0,0,0.25);
-        z-index: 99990;
-        font-size: 14px;
+      display: none;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: white;
+      padding: 20px;
+      max-height: 60%;
+      overflow-y: auto;
+      border-radius: 20px 20px 0 0;
+      box-shadow: 0px -6px 14px rgba(0, 0, 0, 0.25);
+      z-index: 99990;
+      font-size: 14px;
+    }
+
+    #legend-content-mobile .item-legenda {
+      margin-bottom: 6px;
     }
 
     /* Modo celular */
     @media (max-width: 768px) {
-        #legend { display: none !important; }
-        #legend-toggle { display: block !important; }
+      #legend {
+        display: none !important;
+      }
+      #legend-toggle {
+        display: block !important;
+      }
     }
-</style>
 
+    /* DEBUG VISÍVEL EM CASO DE ERRO */
+    #debug {
+      position: fixed;
+      right: 10px;
+      bottom: 10px;
+      z-index: 99999;
+      background: #ffefef;
+      border: 1px solid #ff5c5c;
+      color: #a40000;
+      padding: 8px 10px;
+      border-radius: 6px;
+      max-width: 40%;
+      font-size: 12px;
+      white-space: pre-wrap;
+      display: none;
+    }
+  </style>
 </head>
+
 <body>
+  <div id="map"></div>
 
-<div id="map"></div>
+  <!-- Legenda Desktop -->
+  <div id="legend"></div>
 
-<!-- Legenda Desktop -->
-<div id="legend"></div>
+  <!-- Botão Mobile -->
+  <button id="legend-toggle">Legenda ↑</button>
 
-<!-- Botão Mobile -->
-<button id="legend-toggle">Legenda ↑</button>
-
-<!-- Painel Mobile -->
-<div id="legend-mobile">
+  <!-- Painel Mobile -->
+  <div id="legend-mobile">
     <h3>Legenda</h3>
     <div id="legend-content-mobile"></div>
-</div>
+  </div>
 
-<!-- Leaflet JS -->
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- DEBUG -->
+  <div id="debug"></div>
 
-<script>
-// ====================== CONFIG ============================
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-// ✅ URL DO SEU WEBAPP (planilha -> JSON)
-const DATA_URL = "https://script.google.com/macros/s/AKfycbx-Ke4zLgz1Id8Dj5YF7uoj7PHdxaj9uItQ9MjeUvl6LlN_XT6_bFrWrJjmKUYvFjR8/exec";
+  <script>
+    // ====================== CONFIG ============================
 
-// ✅ GeoJSON de municípios (arquivo no MESMO repositório)
-const MUNICIPIOS_URL = "municipios-br.geojson";
+    // ✅ URL DO SEU WEBAPP (planilha -> JSON)
+    const DATA_URL =
+      "https://script.google.com/macros/s/AKfycbx-Ke4zLgz1Id8Dj5YF7uoj7PHdxaj9uItQ9MjeUvl6LlN_XT6_bFrWrJjmKUYvFjR8/exec";
 
-// Paleta fixa de cores para supervisões (usa nome NORMALIZADO: BAHIA GERAL, GOIAS 3 PONTALINA, etc.)
-function getColorForSupervisao(nome) {
-    const colors = [
-        "#e6194B", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
-        "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
-        "#008080", "#e6beff", "#9A6324", "#fffac8", "#800000",
-        "#aaffc3", "#808000", "#ffd8b1", "#000075", "#808080"
-    ];
-    let hash = 0;
-    for (let i = 0; i < nome.length; i++) {
+    // ✅ GeoJSON de municípios (arquivo no MESMO repositório)
+    const MUNICIPIOS_URL = "municipios-br.geojson";
+
+    // Paleta de cores p/ supervisões (usa nome NORMALIZADO)
+    function getColorForSupervisao(nome) {
+      const colors = [
+        "#e6194B",
+        "#3cb44b",
+        "#ffe119",
+        "#4363d8",
+        "#f58231",
+        "#911eb4",
+        "#46f0f0",
+        "#f032e6",
+        "#bcf60c",
+        "#fabebe",
+        "#008080",
+        "#e6beff",
+        "#9A6324",
+        "#fffac8",
+        "#800000",
+        "#aaffc3",
+        "#808000",
+        "#ffd8b1",
+        "#000075",
+        "#808080",
+      ];
+      let hash = 0;
+      for (let i = 0; i < nome.length; i++) {
         hash = nome.charCodeAt(i) + ((hash << 5) - hash);
+      }
+      return colors[Math.abs(hash) % colors.length];
     }
-    return colors[Math.abs(hash) % colors.length];
-}
 
-// Mesma normalização do Apps Script
-function normalizarIBGEFront(txt) {
-    if (!txt) return "";
-    return String(txt)
+    // Mesma normalização do Apps Script
+    function normalizarIBGEFront(txt) {
+      if (!txt) return "";
+      return String(txt)
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "")
         .replace(/[^A-Za-z0-9 ]/g, " ")
         .replace(/\s+/g, " ")
         .trim()
         .toUpperCase();
-}
+    }
 
-// ====================== MAPA ============================
-const map = L.map('map').setView([-15.8, -47.9], 5);
+    // DEBUG helper
+    function showDebug(msg, extra) {
+      const box = document.getElementById("debug");
+      box.style.display = "block";
+      box.textContent =
+        "[DEBUG] " + msg + (extra ? "\n" + JSON.stringify(extra, null, 2) : "");
+      console.error(msg, extra || "");
+    }
 
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 18
-}).addTo(map);
+    // ====================== MAPA ============================
+    if (typeof L === "undefined") {
+      // se Leaflet não carregou
+      showDebug("Leaflet (L) não está definido. Verifique conexão com unpkg.");
+    } else {
+      const map = L.map("map").setView([-15.8, -47.9], 5);
 
-// Camadas por supervisão
-let supervisaoLayers = {};
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 18,
+        attribution: "&copy; OpenStreetMap contributors",
+      }).addTo(map);
 
-// ====================== CARREGAR DADOS ============================
-async function carregarDados() {
-    try {
-        // 1) Busca os dados da planilha (cidade/UF/supervisao NORMALIZADOS)
-        const pontosResp = await fetch(DATA_URL);
-        const pontos = await pontosResp.json(); 
-        // pontos = [{ cidade, uf, supervisao, lat, lng }, ...]
+      // Camadas por supervisão
+      const supervisaoLayers = {};
 
-        if (!Array.isArray(pontos)) {
-            console.error("Resposta do Apps Script:", pontos);
-            alert("Erro ao carregar dados da planilha. Veja o console.");
+      // ====================== CARREGAR DADOS ============================
+      async function carregarDados() {
+        try {
+          // 1) Dados da planilha
+          const pontosResp = await fetch(DATA_URL);
+          const pontos = await pontosResp.json();
+
+          if (!Array.isArray(pontos)) {
+            showDebug("Resposta do Apps Script não é array", pontos);
             return;
-        }
+          }
 
-        // 2) Busca o GeoJSON dos municípios
-        const municipiosResp = await fetch(MUNICIPIOS_URL);
-        const municipios = await municipiosResp.json();
+          // 2) GeoJSON de municípios
+          const municipiosResp = await fetch(MUNICIPIOS_URL);
+          const municipios = await municipiosResp.json();
 
-        const legendDiv = document.getElementById("legend");
-        legendDiv.innerHTML = "<h3>Supervisões</h3>";
+          const legendDiv = document.getElementById("legend");
+          legendDiv.innerHTML = "<h3>Supervisões</h3>";
 
-        // Mapa de supervisão -> cor
-        const coresPorSupervisao = {};
+          // Mapa de supervisão -> cor
+          const coresPorSupervisao = {};
 
-        // Primeiro, descobre todas as supervisões usadas
-        pontos.forEach(p => {
-            const sup = p.supervisao; // já vem normalizado do Apps Script
+          pontos.forEach((p) => {
+            const sup = p.supervisao;
             if (!sup) return;
             if (!coresPorSupervisao[sup]) {
-                coresPorSupervisao[sup] = getColorForSupervisao(sup);
+              coresPorSupervisao[sup] = getColorForSupervisao(sup);
             }
-        });
+          });
 
-        // Cria layer + item de legenda para cada supervisão
-        Object.keys(coresPorSupervisao).forEach(sup => {
+          // Se não veio nada
+          if (Object.keys(coresPorSupervisao).length === 0) {
+            showDebug("Nenhuma supervisão encontrada nos dados", pontos.slice(0, 5));
+          }
+
+          // 2.1) Cria layer + item de legenda interativo para cada supervisão
+          Object.keys(coresPorSupervisao).forEach((sup) => {
             const cor = coresPorSupervisao[sup];
 
+            // layer group
             supervisaoLayers[sup] = L.layerGroup().addTo(map);
 
-// Criar item de legenda interativo
-const item = document.createElement("div");
-item.style.marginBottom = "6px";
-item.style.cursor = "pointer";
-item.style.display = "flex";
-item.style.alignItems = "center";
-item.style.gap = "6px";
-item.style.opacity = "1";
+            // item legenda (desktop)
+            const item = document.createElement("div");
+            item.className = "item-legenda";
+            item.style.marginBottom = "6px";
+            item.style.cursor = "pointer";
+            item.style.display = "flex";
+            item.style.alignItems = "center";
+            item.style.gap = "6px";
+            item.style.opacity = "1";
 
-const corBox = document.createElement("span");
-corBox.style.background = cor;
-corBox.style.width = "14px";
-corBox.style.height = "14px";
-corBox.style.display = "inline-block";
-corBox.style.borderRadius = "3px";
+            const corBox = document.createElement("span");
+            corBox.style.background = cor;
+            corBox.style.width = "14px";
+            corBox.style.height = "14px";
+            corBox.style.display = "inline-block";
+            corBox.style.borderRadius = "3px";
 
-const txt = document.createElement("span");
-txt.textContent = sup;
+            const txt = document.createElement("span");
+            txt.textContent = sup;
 
-// estado inicial
-let ativo = true;
+            let ativo = true;
 
-item.onclick = () => {
-    ativo = !ativo;
-    if (ativo) {
-        supervisaoLayers[sup].addTo(map);
-        item.style.opacity = "1";
-    } else {
-        map.removeLayer(supervisaoLayers[sup]);
-        item.style.opacity = "0.4";
-    }
-};
+            item.onclick = () => {
+              ativo = !ativo;
+              if (ativo) {
+                supervisaoLayers[sup].addTo(map);
+                item.style.opacity = "1";
+              } else {
+                map.removeLayer(supervisaoLayers[sup]);
+                item.style.opacity = "0.4";
+              }
+            };
 
-item.appendChild(corBox);
-item.appendChild(txt);
-legendDiv.appendChild(item);
+            item.appendChild(corBox);
+            item.appendChild(txt);
+            legendDiv.appendChild(item);
+          });
 
-        });
+          // 3) Para cada município, procurar na planilha cidade + UF
+          const bounds = [];
 
-        // 3) Para cada município do GeoJSON, acha correspondência na planilha
-        municipios.features.forEach(f => {
+          municipios.features.forEach((f) => {
             const cidadeGeo = normalizarIBGEFront(f.properties.name);
-            const ufGeo     = normalizarIBGEFront(f.properties.uf);
+            const ufGeo = normalizarIBGEFront(f.properties.uf);
 
-            // procura na lista de pontos da planilha
-            const match = pontos.find(p =>
+            const match = pontos.find(
+              (p) =>
                 normalizarIBGEFront(p.cidade) === cidadeGeo &&
                 normalizarIBGEFront(p.uf) === ufGeo
             );
 
             if (match) {
-                const sup = match.supervisao;
-                const cor = coresPorSupervisao[sup] || getColorForSupervisao(sup);
+              const sup = match.supervisao;
+              const cor =
+                coresPorSupervisao[sup] || getColorForSupervisao(sup);
 
-                const poly = L.geoJSON(f, {
-                    style: {
-                        color: cor,
-                        weight: 2,
-                        fillColor: cor,
-                        fillOpacity: 0.35
-                    }
-                });
+              const poly = L.geoJSON(f, {
+                style: {
+                  color: cor,
+                  weight: 2,
+                  fillColor: cor,
+                  fillOpacity: 0.35,
+                },
+              });
 
-                poly.addTo(supervisaoLayers[sup]);
+              poly.addTo(supervisaoLayers[sup]);
 
-                poly.bindPopup(`
-                    <b>${cidadeGeo} - ${ufGeo}</b><br>
-                    <b>Supervisão:</b> ${sup}
-                `);
+              poly.bindPopup(
+                `<b>${cidadeGeo} - ${ufGeo}</b><br><b>Supervisão:</b> ${sup}`
+              );
+
+              // guardar para ajustar o zoom
+              try {
+                const center = poly.getBounds().getCenter();
+                bounds.push([center.lat, center.lng]);
+              } catch (e) {}
             }
-        });
+          });
 
-        copiarLegendaParaMobile();
+          if (bounds.length > 0) {
+            map.fitBounds(bounds, { padding: [30, 30] });
+          }
 
-    } catch (e) {
-        console.error("Erro em carregarDados:", e);
-        alert("Erro ao montar o mapa. Veja o console do navegador.");
+          copiarLegendaParaMobile();
+        } catch (e) {
+          showDebug("Erro em carregarDados()", String(e));
+        }
+      }
+
+      carregarDados();
+
+      // ================= MOBILE LEGEND ======================
+      function copiarLegendaParaMobile() {
+        document.getElementById("legend-content-mobile").innerHTML =
+          document.getElementById("legend").innerHTML;
+      }
+
+      const btn = document.getElementById("legend-toggle");
+      const panel = document.getElementById("legend-mobile");
+      let aberto = false;
+
+      btn.addEventListener("click", () => {
+        aberto = !aberto;
+        panel.style.display = aberto ? "block" : "none";
+        btn.textContent = aberto ? "Fechar ↓" : "Legenda ↑";
+      });
     }
-}
-
-carregarDados();
-
-// ================= MOBILE LEGEND ======================
-function copiarLegendaParaMobile() {
-    document.getElementById("legend-content-mobile").innerHTML =
-        document.getElementById("legend").innerHTML;
-}
-
-const btn = document.getElementById("legend-toggle");
-const panel = document.getElementById("legend-mobile");
-let aberto = false;
-
-btn.addEventListener("click", () => {
-    aberto = !aberto;
-    panel.style.display = aberto ? "block" : "none";
-    btn.textContent = aberto ? "Fechar ↓" : "Legenda ↑";
-});
-</script>
-
+  </script>
 </body>
 </html>
