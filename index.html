@@ -101,14 +101,13 @@
 <script>
 // ====================== CONFIG ============================
 
-// 🔴 IMPORTANTE: sem o "S" no começo
-const DATA_URL = "const DATA_URL = "https://script.google.com/macros/s/AKfycbx-Ke4zLgz1Id8Dj5YF7uoj7PHdxaj9uItQ9MjeUvl6LlN_XT6_bFrWrJjmKUYvFjR8/exec";
-";
+// ✅ URL DO SEU WEBAPP (planilha -> JSON)
+const DATA_URL = "https://script.google.com/macros/s/AKfycbx-Ke4zLgz1Id8Dj5YF7uoj7PHdxaj9uItQ9MjeUvl6LlN_XT6_bFrWrJjmKUYvFjR8/exec";
 
-// GeoJSON dos municípios (no mesmo repositório do GitHub)
+// ✅ GeoJSON de municípios (arquivo no MESMO repositório)
 const MUNICIPIOS_URL = "municipios-br.geojson";
 
-// Paleta fixa de cores para supervisões (usa nome NORMALIZADO: BAHIA, MT1 etc.)
+// Paleta fixa de cores para supervisões (usa nome NORMALIZADO: BAHIA GERAL, GOIAS 3 PONTALINA, etc.)
 function getColorForSupervisao(nome) {
     const colors = [
         "#e6194B", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
@@ -123,7 +122,7 @@ function getColorForSupervisao(nome) {
     return colors[Math.abs(hash) % colors.length];
 }
 
-// Mesma normalização do Apps Script (normalizarIBGE)
+// Mesma normalização do Apps Script
 function normalizarIBGEFront(txt) {
     if (!txt) return "";
     return String(txt)
@@ -148,52 +147,95 @@ let supervisaoLayers = {};
 // ====================== CARREGAR DADOS ============================
 async function carregarDados() {
     try {
+        // 1) Busca os dados da planilha (cidade/UF/supervisao NORMALIZADOS)
         const pontosResp = await fetch(DATA_URL);
-        const pontos = await pontosResp.json(); // [{cidade, uf, supervisao, lat, lng}, ...]
+        const pontos = await pontosResp.json(); 
+        // pontos = [{ cidade, uf, supervisao, lat, lng }, ...]
 
-        // Se vier erro do Apps Script, mostra no console
         if (!Array.isArray(pontos)) {
             console.error("Resposta do Apps Script:", pontos);
             alert("Erro ao carregar dados da planilha. Veja o console.");
             return;
         }
 
+        // 2) Busca o GeoJSON dos municípios
         const municipiosResp = await fetch(MUNICIPIOS_URL);
         const municipios = await municipiosResp.json();
 
         const legendDiv = document.getElementById("legend");
         legendDiv.innerHTML = "<h3>Supervisões</h3>";
 
-        // Criar layer e legenda para cada supervisão encontrada
+        // Mapa de supervisão -> cor
+        const coresPorSupervisao = {};
+
+        // Primeiro, descobre todas as supervisões usadas
         pontos.forEach(p => {
-            const sup = p.supervisao; // já vem NORMALIZADO do Apps Script
-            const cor = getColorForSupervisao(sup);
-
-            if (!supervisaoLayers[sup]) {
-                supervisaoLayers[sup] = L.layerGroup().addTo(map);
-
-                legendDiv.innerHTML += `
-                    <div style="margin-bottom:6px">
-                        <span style="background:${cor};width:14px;height:14px;display:inline-block;margin-right:6px;border-radius:3px;"></span>
-                        ${sup}
-                    </div>
-                `;
+            const sup = p.supervisao; // já vem normalizado do Apps Script
+            if (!sup) return;
+            if (!coresPorSupervisao[sup]) {
+                coresPorSupervisao[sup] = getColorForSupervisao(sup);
             }
         });
 
-        // Pintar polígonos de municípios
+        // Cria layer + item de legenda para cada supervisão
+        Object.keys(coresPorSupervisao).forEach(sup => {
+            const cor = coresPorSupervisao[sup];
+
+            supervisaoLayers[sup] = L.layerGroup().addTo(map);
+
+// Criar item de legenda interativo
+const item = document.createElement("div");
+item.style.marginBottom = "6px";
+item.style.cursor = "pointer";
+item.style.display = "flex";
+item.style.alignItems = "center";
+item.style.gap = "6px";
+item.style.opacity = "1";
+
+const corBox = document.createElement("span");
+corBox.style.background = cor;
+corBox.style.width = "14px";
+corBox.style.height = "14px";
+corBox.style.display = "inline-block";
+corBox.style.borderRadius = "3px";
+
+const txt = document.createElement("span");
+txt.textContent = sup;
+
+// estado inicial
+let ativo = true;
+
+item.onclick = () => {
+    ativo = !ativo;
+    if (ativo) {
+        supervisaoLayers[sup].addTo(map);
+        item.style.opacity = "1";
+    } else {
+        map.removeLayer(supervisaoLayers[sup]);
+        item.style.opacity = "0.4";
+    }
+};
+
+item.appendChild(corBox);
+item.appendChild(txt);
+legendDiv.appendChild(item);
+
+        });
+
+        // 3) Para cada município do GeoJSON, acha correspondência na planilha
         municipios.features.forEach(f => {
             const cidadeGeo = normalizarIBGEFront(f.properties.name);
             const ufGeo     = normalizarIBGEFront(f.properties.uf);
 
+            // procura na lista de pontos da planilha
             const match = pontos.find(p =>
-                p.cidade === cidadeGeo &&
-                p.uf === ufGeo
+                normalizarIBGEFront(p.cidade) === cidadeGeo &&
+                normalizarIBGEFront(p.uf) === ufGeo
             );
 
             if (match) {
                 const sup = match.supervisao;
-                const cor = getColorForSupervisao(sup);
+                const cor = coresPorSupervisao[sup] || getColorForSupervisao(sup);
 
                 const poly = L.geoJSON(f, {
                     style: {
@@ -205,6 +247,7 @@ async function carregarDados() {
                 });
 
                 poly.addTo(supervisaoLayers[sup]);
+
                 poly.bindPopup(`
                     <b>${cidadeGeo} - ${ufGeo}</b><br>
                     <b>Supervisão:</b> ${sup}
@@ -213,6 +256,7 @@ async function carregarDados() {
         });
 
         copiarLegendaParaMobile();
+
     } catch (e) {
         console.error("Erro em carregarDados:", e);
         alert("Erro ao montar o mapa. Veja o console do navegador.");
@@ -240,4 +284,3 @@ btn.addEventListener("click", () => {
 
 </body>
 </html>
-
