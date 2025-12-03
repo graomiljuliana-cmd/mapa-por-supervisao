@@ -35,6 +35,7 @@
         max-height: 70vh;
         overflow-y: auto;
         box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        font-size: 14px;
     }
 
     /* Botão para abrir legenda no celular */
@@ -67,6 +68,7 @@
         border-radius: 20px 20px 0 0;
         box-shadow: 0px -6px 14px rgba(0,0,0,0.25);
         z-index: 99990;
+        font-size: 14px;
     }
 
     /* Modo celular */
@@ -98,10 +100,14 @@
 
 <script>
 // ====================== CONFIG ============================
-const DATA_URL = "https://script.google.com/macros/s/AKfycbzkTPjCUmRapObROd68_ar6LLynTv2zj3YCoulw2MP4fGsqOPAGyAuy6KL8TLKSPQVRIQ/exec";  // <- ALTERAR AQUI!!!
+
+// 🔴 IMPORTANTE: sem o "S" no começo
+const DATA_URL = "https://script.google.com/macros/s/AKfycbwCygprEX86NlhN3bmzWx4mBWgCEK9uOceNzyWlx_JL34vTgu9uTyat_k6kMsnp5SW4rw/exec";
+
+// GeoJSON dos municípios (no mesmo repositório do GitHub)
 const MUNICIPIOS_URL = "municipios-br.geojson";
 
-// Paleta fixa de cores para supervisões
+// Paleta fixa de cores para supervisões (usa nome NORMALIZADO: BAHIA, MT1 etc.)
 function getColorForSupervisao(nome) {
     const colors = [
         "#e6194B", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
@@ -110,9 +116,22 @@ function getColorForSupervisao(nome) {
         "#aaffc3", "#808000", "#ffd8b1", "#000075", "#808080"
     ];
     let hash = 0;
-    for (let i = 0; i < nome.length; i++)
+    for (let i = 0; i < nome.length; i++) {
         hash = nome.charCodeAt(i) + ((hash << 5) - hash);
+    }
     return colors[Math.abs(hash) % colors.length];
+}
+
+// Mesma normalização do Apps Script (normalizarIBGE)
+function normalizarIBGEFront(txt) {
+    if (!txt) return "";
+    return String(txt)
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^A-Za-z0-9 ]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toUpperCase();
 }
 
 // ====================== MAPA ============================
@@ -127,56 +146,76 @@ let supervisaoLayers = {};
 
 // ====================== CARREGAR DADOS ============================
 async function carregarDados() {
-    const pontosResp = await fetch(DATA_URL);
-    const pontos = await pontosResp.json();
+    try {
+        const pontosResp = await fetch(DATA_URL);
+        const pontos = await pontosResp.json(); // [{cidade, uf, supervisao, lat, lng}, ...]
 
-    const municipiosResp = await fetch(MUNICIPIOS_URL);
-    const municipios = await municipiosResp.json();
-
-    const legendDiv = document.getElementById("legend");
-    legendDiv.innerHTML = "<h3>Supervisões</h3>";
-
-    pontos.forEach(p => {
-        const cor = getColorForSupervisao(p.supervisao);
-
-        // Criar grupo caso não exista
-        if (!supervisaoLayers[p.supervisao]) {
-            supervisaoLayers[p.supervisao] = L.layerGroup().addTo(map);
-
-            legendDiv.innerHTML += `
-                <div style="margin-bottom:6px">
-                    <span style="background:${cor};width:14px;height:14px;display:inline-block;margin-right:6px;border-radius:3px;"></span>
-                    ${p.supervisao}
-                </div>
-            `;
+        // Se vier erro do Apps Script, mostra no console
+        if (!Array.isArray(pontos)) {
+            console.error("Resposta do Apps Script:", pontos);
+            alert("Erro ao carregar dados da planilha. Veja o console.");
+            return;
         }
-    });
 
-    // Adicionar polígonos
-    municipios.features.forEach(f => {
-        const cidade = f.properties.name.toUpperCase();
-        const uf = f.properties.uf.toUpperCase();
+        const municipiosResp = await fetch(MUNICIPIOS_URL);
+        const municipios = await municipiosResp.json();
 
-        const match = pontos.find(p =>
-            p.cidade.toUpperCase() === cidade &&
-            p.uf.toUpperCase() === uf
-        );
+        const legendDiv = document.getElementById("legend");
+        legendDiv.innerHTML = "<h3>Supervisões</h3>";
 
-        if (match) {
-            const cor = getColorForSupervisao(match.supervisao);
+        // Criar layer e legenda para cada supervisão encontrada
+        pontos.forEach(p => {
+            const sup = p.supervisao; // já vem NORMALIZADO do Apps Script
+            const cor = getColorForSupervisao(sup);
 
-            const poly = L.geoJSON(f, {
-                style: {
-                    color: cor,
-                    weight: 2,
-                    fillColor: cor,
-                    fillOpacity: 0.35
-                }
-            }).addTo(supervisaoLayers[match.supervisao]);
-        }
-    });
+            if (!supervisaoLayers[sup]) {
+                supervisaoLayers[sup] = L.layerGroup().addTo(map);
 
-    copiarLegendaParaMobile();
+                legendDiv.innerHTML += `
+                    <div style="margin-bottom:6px">
+                        <span style="background:${cor};width:14px;height:14px;display:inline-block;margin-right:6px;border-radius:3px;"></span>
+                        ${sup}
+                    </div>
+                `;
+            }
+        });
+
+        // Pintar polígonos de municípios
+        municipios.features.forEach(f => {
+            const cidadeGeo = normalizarIBGEFront(f.properties.name);
+            const ufGeo     = normalizarIBGEFront(f.properties.uf);
+
+            const match = pontos.find(p =>
+                p.cidade === cidadeGeo &&
+                p.uf === ufGeo
+            );
+
+            if (match) {
+                const sup = match.supervisao;
+                const cor = getColorForSupervisao(sup);
+
+                const poly = L.geoJSON(f, {
+                    style: {
+                        color: cor,
+                        weight: 2,
+                        fillColor: cor,
+                        fillOpacity: 0.35
+                    }
+                });
+
+                poly.addTo(supervisaoLayers[sup]);
+                poly.bindPopup(`
+                    <b>${cidadeGeo} - ${ufGeo}</b><br>
+                    <b>Supervisão:</b> ${sup}
+                `);
+            }
+        });
+
+        copiarLegendaParaMobile();
+    } catch (e) {
+        console.error("Erro em carregarDados:", e);
+        alert("Erro ao montar o mapa. Veja o console do navegador.");
+    }
 }
 
 carregarDados();
@@ -200,4 +239,3 @@ btn.addEventListener("click", () => {
 
 </body>
 </html>
-
