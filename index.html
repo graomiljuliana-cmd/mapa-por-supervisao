@@ -22,8 +22,6 @@
       height: 100%;
       width: 100%;
     }
-
-    /* Painel padrão (desktop) */
     .panel {
       position: absolute;
       top: 10px;
@@ -67,48 +65,12 @@
       border: 1px solid #333;
       margin-right: 5px;
     }
-
-    /* Botão de toggle (mobile) */
-    #toggle-panel {
-      position: absolute;
-      bottom: 10px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 1100;
-      padding: 8px 16px;
-      border-radius: 20px;
-      border: none;
-      background: #2c3e50;
-      color: #fff;
-      font-size: 14px;
-      cursor: pointer;
-      display: none; /* só aparece no mobile */
-    }
-
-    /* COMPORTAMENTO MOBILE */
-    @media (max-width: 768px) {
-      /* painel vai para baixo, em toda a largura */
-      .panel {
-        top: auto;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        max-width: none;
-        border-radius: 12px 12px 0 0;
-      }
-      #toggle-panel {
-        display: block;
-      }
-    }
   </style>
 </head>
 <body>
   <div id="map"></div>
 
-  <!-- Botão mobile para abrir/recolher o painel -->
-  <button id="toggle-panel">Filtros ↓</button>
-
-  <div class="panel" id="painel-filtros">
+  <div class="panel">
     <h4>Filtro de Supervisão</h4>
     <select id="filtro">
       <option value="">Todas</option>
@@ -144,14 +106,36 @@
     // chaves "CIDADE|UF" -> supervisão
     let cidadeParaSupervisao = {};
 
-    const palette = [
-      '#d73027','#4575b4','#1a9850','#984ea3',
-      '#f46d43','#74add1','#4daf4a','#f781bf',
-      '#e31a1c','#3690c0','#a6cee3','#fb9a99',
-      '#ff7f00','#a6d854','#e7298a'
+    /*************** CORES COM MAIS CONTRASTE ***************/
+    const BASE_COLORS = [
+      "#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00",
+      "#a65628", "#f781bf", "#999999", "#66c2a5", "#fc8d62",
+      "#8da0cb", "#e78ac3", "#a6d854", "#ffd92f", "#e5c494",
+      "#b3b3b3", "#1b9e77", "#d95f02", "#7570b3", "#e7298a",
+      "#66a61e", "#e6ab02", "#a6761d", "#666666"
     ];
-    const corSup = {};
-    let corIdx = 0;
+
+    // supNorm -> cor
+    let supColorMap = {};
+
+    // distribui cores espaçando índices para aumentar contraste
+    function buildSupColorMap(supListNorm) {
+      const n = BASE_COLORS.length;
+      if (n === 0) return;
+
+      const step = 7; // número coprimo ao tamanho típico da paleta
+      let idx = 0;
+
+      supListNorm.forEach(supNorm => {
+        supColorMap[supNorm] = BASE_COLORS[idx % n];
+        idx = (idx + step) % n;
+      });
+    }
+
+    function corPara(sup) {
+      const key = normalizar(sup);
+      return supColorMap[key] || "#999999";
+    }
 
     let GEO_CITY_FIELD = null;
     let GEO_UF_FIELD   = null;
@@ -175,18 +159,10 @@
       return normalizar(c) + "|" + normalizar(u || "");
     }
 
-    function corPara(sup) {
-      if (!corSup[sup]) {
-        corSup[sup] = palette[corIdx % palette.length];
-        corIdx++;
-      }
-      return corSup[sup];
-    }
-
     function detectarCamposCidadeUF(exemploProps) {
       const keys = Object.keys(exemploProps);
 
-      // UF: tenta campo com "UF" ou "STATE" (alguns GeoJSON têm)
+      // UF: tenta campo com "UF" ou "STATE"
       for (const k of keys) {
         const up = k.toUpperCase();
         if (up.includes("UF") || up.includes("STATE")) {
@@ -256,6 +232,8 @@
           return;
         }
 
+        const supNormsSet = new Set();
+
         dadosPlanilha.forEach(p => {
           const cidadeNorm = normalizar(p.cidade);
           const ufNorm     = normalizar(p.uf);
@@ -266,10 +244,16 @@
 
           const chaveFull = cidadeNorm + "|" + ufNorm;
           cidadeParaSupervisao[chaveFull] = sup;
+
+          supNormsSet.add(normalizar(sup));
         });
 
+        // monta mapa de cores antes de desenhar
+        const listaSupNorm = [...supNormsSet].sort();
+        buildSupColorMap(listaSupNorm);
+
         console.log("Total de cidades da planilha:", Object.keys(cidadeParaSupervisao).length);
-        console.log("Algumas chaves da planilha:", Object.keys(cidadeParaSupervisao).slice(0, 15));
+        console.log("Supervisões (normalizadas):", listaSupNorm);
 
         // 2) Baixa metadados IBGE (para descobrir UF por id)
         const municipiosMeta = await fetch(MUNICIPIOS_META_URL).then(r => r.json());
@@ -310,12 +294,14 @@
           },
           style: feat => {
             const sup = feat.properties._sup;
-            const cor = corPara(normalizar(sup));
+            const cor = corPara(sup);
             return {
+              // sem borda de município, só o “bloco” da supervisão
+              stroke: false,
               color: cor,
-              weight: 1.6,
+              weight: 0,
               fillColor: cor,
-              fillOpacity: 0.35
+              fillOpacity: 0.5
             };
           },
           onEachFeature: (feat, layer) => {
@@ -355,7 +341,7 @@
       });
 
       const lista = [...sups].sort();
-      console.log("Supervisões detectadas no mapa:", lista);
+      console.log("Supervisões detectadas no mapa (para legenda):", lista);
 
       lista.forEach(s => {
         // dropdown
@@ -369,14 +355,14 @@
         item.className = "legend-item";
         item.dataset.supNorm = s;
 
-        const cor = document.createElement("div");
-        cor.className = "legend-color";
-        cor.style.background = corPara(s);
+        const corDiv = document.createElement("div");
+        corDiv.className = "legend-color";
+        corDiv.style.background = supColorMap[s] || "#999999";
 
         const label = document.createElement("span");
         label.textContent = s;
 
-        item.appendChild(cor);
+        item.appendChild(corDiv);
         item.appendChild(label);
         legenda.appendChild(item);
 
@@ -416,7 +402,7 @@
 
         l.setStyle({
           opacity: visivel ? 1 : 0,
-          fillOpacity: visivel ? 0.35 : 0
+          fillOpacity: visivel ? 0.5 : 0
         });
 
         if (visivel) {
@@ -426,36 +412,6 @@
       });
       if (bounds) map.fitBounds(bounds);
     }
-
-    /************* TOGGLE MOBILE DO PAINEL *************/
-    (function configurarToggleMobile() {
-      const painel = document.getElementById("painel-filtros");
-      const botao  = document.getElementById("toggle-panel");
-
-      if (!painel || !botao) return;
-
-      let visivel = true;
-
-      botao.addEventListener("click", () => {
-        visivel = !visivel;
-        painel.style.display = visivel ? "block" : "none";
-        botao.textContent = visivel ? "Fechar filtros ↓" : "Filtros ↑";
-      });
-
-      // garante que no desktop o painel sempre aparece
-      function ajustarPorTamanho() {
-        if (window.innerWidth > 768) {
-          painel.style.display = "block";
-          botao.style.display  = "none";
-        } else {
-          botao.style.display  = "block";
-          if (visivel) painel.style.display = "block";
-        }
-      }
-
-      window.addEventListener("resize", ajustarPorTamanho);
-      ajustarPorTamanho();
-    })();
 
     iniciar();
   </script>
