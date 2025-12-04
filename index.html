@@ -356,57 +356,61 @@
       }
     }
 
-    function criarLayerContornosSupervisao() {
-      if (!window.turf) {
-        console.warn("Turf.js não carregado, contornos unificados desativados.");
-        return;
-      }
+   function criarLayerContornosSupervisao() {
+  if (!window.turf) {
+    console.warn("Turf.js não carregado, contornos unificados desativados.");
+    return;
+  }
 
-      layerSupOutlines = L.geoJSON(null, {
-        style: feat => {
-          const supNorm = feat.properties._supNorm;
-          const cor = corPara(supNorm);
-          return {
-            color: cor,
-            weight: 3,
-            fillOpacity: 0,
-            opacity: 1
-          };
-        }
-      }).addTo(map);
+  layerSupOutlines = L.geoJSON(null, {
+    style: feat => {
+      const supNorm = feat.properties._supNorm;
+      const cor = corPara(supNorm);
+      return {
+        color: cor,
+        weight: 3,
+        fillOpacity: 0,
+        opacity: 1
+      };
+    },
+    // 👇 importante: contorno só visual, não captura clique
+    interactive: false
+  }).addTo(map);
 
-      Object.entries(featuresPorSup).forEach(([supNorm, feats]) => {
-        if (!feats || !feats.length) return;
+  // opcional: joga o contorno para trás dos tiles, mas continua visível
+  layerSupOutlines.bringToBack();
 
-        let unionFeature = null;
+  Object.entries(featuresPorSup).forEach(([supNorm, feats]) => {
+    if (!feats || !feats.length) return;
 
-        try {
-          // faz o union de todos os polígonos daquela supervisão
-          feats.forEach((f, idx) => {
-            const feat = {
-              type: "Feature",
-              properties: {},
-              geometry: f.geometry
-            };
-            if (idx === 0) {
-              unionFeature = feat;
-            } else {
-              unionFeature = turf.union(unionFeature, feat);
-            }
-          });
+    let unionFeature = null;
 
-          if (unionFeature && unionFeature.geometry) {
-            unionFeature.properties = unionFeature.properties || {};
-            unionFeature.properties._supNorm = supNorm;
-            layerSupOutlines.addData(unionFeature);
-          }
-        } catch (e) {
-          console.error("Erro ao unir polígonos da supervisão", supNorm, e);
+    try {
+      feats.forEach((f, idx) => {
+        const feat = {
+          type: "Feature",
+          properties: {},
+          geometry: f.geometry
+        };
+        if (idx === 0) {
+          unionFeature = feat;
+        } else {
+          unionFeature = turf.union(unionFeature, feat);
         }
       });
 
-      console.log("Camada de contornos por supervisão criada.");
+      if (unionFeature && unionFeature.geometry) {
+        unionFeature.properties = unionFeature.properties || {};
+        unionFeature.properties._supNorm = supNorm;
+        layerSupOutlines.addData(unionFeature);
+      }
+    } catch (e) {
+      console.error("Erro ao unir polígonos da supervisão", supNorm, e);
     }
+  });
+
+  console.log("Camada de contornos por supervisão criada.");
+}
 
     function montarFiltroELegenda() {
       const select  = document.getElementById("filtro");
@@ -520,3 +524,4 @@
   </script>
 </body>
 </html>
+
