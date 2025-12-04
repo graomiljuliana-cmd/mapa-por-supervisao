@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Mapa de Supervisões - Cidades</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    crossorigin=""
+  />
+
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      width: 100%;
+      font-family: Arial, sans-serif;
+    }
+    #map {
+      height: 100%;
+      width: 100%;
+    }
+    .panel {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: #fff;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+      font-size: 13px;
+      max-width: 260px;
+    }
+    .panel h4 {
+      margin: 0 0 6px 0;
+      font-size: 14px;
+    }
+    .panel select {
+      width: 100%;
+      padding: 4px;
+      margin-bottom: 6px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      margin-bottom: 3px;
+      cursor: pointer;
+      padding: 2px 4px;
+      border-radius: 4px;
+    }
+    .legend-item:hover {
+      background: #f0f0f0;
+    }
+    .legend-item.selected {
+      background: #e0f5e9;
+      font-weight: bold;
+    }
+    .legend-color {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      border: 1px solid #333;
+      margin-right: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div class="panel">
+    <h4>Filtro de Supervisão</h4>
+    <select id="filtro">
+      <option value="">Todas</option>
+    </select>
+    <div id="legenda"></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    /**************** CONFIG ****************/
+    const WEBAPP_URL =
+      "https://script.google.com/macros/s/AKfycbzkTPjCUmRapObROd68_ar6LLynTv2zj3YCoulw2MP4fGsqOPAGyAuy6KL8TLKSPQVRIQ/exec";
+
+    const MUNICIPIOS_GEOJSON = "municipios-br.geojson";
+
+    // base auxiliar com UF por código IBGE
+    const MUNICIPIOS_META_URL =
+      "https://raw.githubusercontent.com/kelvins/municipios-brasileiros/main/json/municipios.json";
+
+    // Mapa código_uf -> sigla UF
+    const UF_MAP = {
+      11:"RO", 12:"AC", 13:"AM", 14:"RR", 15:"PA", 16:"AP", 17:"TO",
+      21:"MA", 22:"PI", 23:"CE", 24:"RN", 25:"PB", 26:"PE", 27:"AL", 28:"SE", 29:"BA",
+      31:"MG", 32:"ES", 33:"RJ", 35:"SP",
+      41:"PR", 42:"SC", 43:"RS",
+      50:"MS", 51:"MT", 52:"GO", 53:"DF"
+    };
+
+    let map;
+    let layerMunicipios;
+
+    // chaves "CIDADE|UF" -> supervisão
+    let cidadeParaSupervisao = {};
+
+    const palette = [
+      '#d73027','#4575b4','#1a9850','#984ea3',
+      '#f46d43','#74add1','#4daf4a','#f781bf',
+      '#e31a1c','#3690c0','#a6cee3','#fb9a99',
+      '#ff7f00','#a6d854','#e7298a'
+    ];
+    const corSup = {};
+    let corIdx = 0;
+
+    let GEO_CITY_FIELD = null;
+    let GEO_UF_FIELD   = null;
+
+    // UF por código IBGE do município (id do GeoJSON)
+    let UF_POR_ID = {};
+
+    /**************** UTILS ****************/
+    function normalizar(str) {
+      if (!str) return "";
+      return String(str)
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^A-Za-z0-9 ]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toUpperCase();
+    }
+
+    function chaveCidadeUF(c, u) {
+      return normalizar(c) + "|" + normalizar(u || "");
+    }
+
+    function corPara(sup) {
+      if (!corSup[sup]) {
+        corSup[sup] = palette[corIdx % palette.length];
+        corIdx++;
+      }
+      return corSup[sup];
+    }
+
+    function detectarCamposCidadeUF(exemploProps) {
+      const keys = Object.keys(exemploProps);
+
+      // UF: tenta campo com "UF" ou "STATE" (alguns GeoJSON têm)
+      for (const k of keys) {
+        const up = k.toUpperCase();
+        if (up.includes("UF") || up.includes("STATE")) {
+          GEO_UF_FIELD = k;
+          break;
+        }
+      }
+
+      // Cidade: preferidos
+      const preferidos = ["NM_MUN","NM_MUNICIP","MUNICIP","MUNICIPIO","NOME","NAME"];
+      for (const pref of preferidos) {
+        const kFound = keys.find(k => k.toUpperCase() === pref);
+        if (kFound) {
+          GEO_CITY_FIELD = kFound;
+          break;
+        }
+      }
+      // fallback: primeiro campo string "normal"
+      if (!GEO_CITY_FIELD) {
+        for (const k of keys) {
+          const v = exemploProps[k];
+          if (typeof v === "string" && k !== "id" && k.toLowerCase() !== "description") {
+            GEO_CITY_FIELD = k;
+            break;
+          }
+        }
+      }
+
+      console.log("Campos detectados no GeoJSON:", {
+        GEO_CITY_FIELD,
+        GEO_UF_FIELD,
+        exemplo: exemploProps
+      });
+    }
+
+    function obterCidadeUF(props) {
+      const cidade = GEO_CITY_FIELD ? (props[GEO_CITY_FIELD] || "") : "";
+      let uf       = GEO_UF_FIELD   ? (props[GEO_UF_FIELD]   || "") : "";
+
+      // se o GeoJSON não tem UF, tentamos buscar pelo id IBGE
+      if (!uf && props.id && UF_POR_ID[String(props.id)]) {
+        uf = UF_POR_ID[String(props.id)];
+      }
+
+      return { cidade, uf };
+    }
+
+    // ➜ SOMENTE CIDADE+UF EXATO
+    function chaveGeoParaMapa(cidade, uf) {
+      const chaveFull = chaveCidadeUF(cidade, uf);
+      return cidadeParaSupervisao[chaveFull] ? chaveFull : null;
+    }
+
+    /**************** MAIN ****************/
+    async function iniciar() {
+      try {
+        map = L.map("map").setView([-15.8, -47.9], 5);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 18
+        }).addTo(map);
+
+        // 1) WebApp (planilha)
+        const dadosPlanilha = await fetch(WEBAPP_URL).then(r => r.json());
+        if (!Array.isArray(dadosPlanilha)) {
+          console.error("WebApp retornou:", dadosPlanilha);
+          alert("Erro ao carregar dados da planilha (WebApp). Veja o console.");
+          return;
+        }
+
+        dadosPlanilha.forEach(p => {
+          const cidadeNorm = normalizar(p.cidade);
+          const ufNorm     = normalizar(p.uf);
+          const sup        = p.supervisao;
+
+          // exige CIDADE + UF + supervisão
+          if (!cidadeNorm || !ufNorm || !sup) return;
+
+          const chaveFull = cidadeNorm + "|" + ufNorm;
+          cidadeParaSupervisao[chaveFull] = sup;
+        });
+
+        console.log("Total de cidades da planilha:", Object.keys(cidadeParaSupervisao).length);
+        console.log("Algumas chaves da planilha:", Object.keys(cidadeParaSupervisao).slice(0, 15));
+
+        // 2) Baixa metadados IBGE (para descobrir UF por id)
+        const municipiosMeta = await fetch(MUNICIPIOS_META_URL).then(r => r.json());
+        UF_POR_ID = {};
+        municipiosMeta.forEach(m => {
+          const uf = UF_MAP[m.codigo_uf];
+          if (uf) {
+            UF_POR_ID[String(m.codigo_ibge)] = uf;
+          }
+        });
+        console.log("Total de códigos IBGE com UF mapeada:", Object.keys(UF_POR_ID).length);
+
+        // 3) GeoJSON de municípios
+        const geojson = await fetch(MUNICIPIOS_GEOJSON).then(r => r.json());
+        if (!geojson.features || !geojson.features.length) {
+          alert("GeoJSON sem features.");
+          return;
+        }
+
+        detectarCamposCidadeUF(geojson.features[0].properties);
+
+        let contComSup = 0;
+
+        layerMunicipios = L.geoJSON(geojson, {
+          // só desenha cidade presente na planilha (cidade+UF)
+          filter: feat => {
+            const props = feat.properties || {};
+            const { cidade, uf } = obterCidadeUF(props);
+            const chave = chaveGeoParaMapa(cidade, uf);
+            if (!chave) return false;
+
+            const sup = cidadeParaSupervisao[chave];
+            if (!sup) return false;
+
+            feat.properties._sup = sup;
+            contComSup++;
+            return true;
+          },
+          style: feat => {
+            const sup = feat.properties._sup;
+            const cor = corPara(normalizar(sup));
+            return {
+              color: cor,
+              weight: 1.6,
+              fillColor: cor,
+              fillOpacity: 0.35
+            };
+          },
+          onEachFeature: (feat, layer) => {
+            const props = feat.properties || {};
+            const { cidade, uf } = obterCidadeUF(props);
+            const sup = props._sup;
+
+            layer._sup = sup || null;
+
+            if (sup) {
+              layer.bindPopup(`<strong>${cidade}${uf ? " - " + uf : ""}</strong><br>Supervisão: ${sup}`);
+            }
+          }
+        }).addTo(map);
+
+        console.log("Municípios desenhados (com supervisão):", contComSup);
+
+        montarFiltroELegenda();
+
+        if (contComSup === 0) {
+          alert("Nenhuma cidade casou com o GeoJSON. Veja o console (F12).");
+        }
+
+      } catch (err) {
+        console.error(err);
+        alert("Erro ao carregar mapa: " + err.message);
+      }
+    }
+
+    function montarFiltroELegenda() {
+      const select  = document.getElementById("filtro");
+      const legenda = document.getElementById("legenda");
+      const sups = new Set();
+
+      layerMunicipios.eachLayer(l => {
+        if (l._sup) sups.add(normalizar(l._sup));
+      });
+
+      const lista = [...sups].sort();
+      console.log("Supervisões detectadas no mapa:", lista);
+
+      lista.forEach(s => {
+        // dropdown
+        const opt = document.createElement("option");
+        opt.value = s;
+        opt.textContent = s;
+        select.appendChild(opt);
+
+        // legenda
+        const item = document.createElement("div");
+        item.className = "legend-item";
+        item.dataset.supNorm = s;
+
+        const cor = document.createElement("div");
+        cor.className = "legend-color";
+        cor.style.background = corPara(s);
+
+        const label = document.createElement("span");
+        label.textContent = s;
+
+        item.appendChild(cor);
+        item.appendChild(label);
+        legenda.appendChild(item);
+
+        // clique na legenda = aplica filtro
+        item.addEventListener("click", () => {
+          const supNorm = item.dataset.supNorm;
+          select.value = supNorm;
+          aplicarFiltro(supNorm);
+          marcarLegendaSelecionada(supNorm);
+        });
+      });
+
+      select.onchange = () => {
+        const v = select.value || "";
+        aplicarFiltro(v);
+        marcarLegendaSelecionada(v);
+      };
+    }
+
+    function marcarLegendaSelecionada(supNorm) {
+      document.querySelectorAll(".legend-item").forEach(el => {
+        if (supNorm && el.dataset.supNorm === supNorm) {
+          el.classList.add("selected");
+        } else {
+          el.classList.remove("selected");
+        }
+      });
+    }
+
+    function aplicarFiltro(supNorm) {
+      let bounds = null;
+      layerMunicipios.eachLayer(l => {
+        const sup = l._sup;
+        if (!sup) return;
+
+        const visivel = !supNorm || normalizar(sup) === supNorm;
+
+        l.setStyle({
+          opacity: visivel ? 1 : 0,
+          fillOpacity: visivel ? 0.35 : 0
+        });
+
+        if (visivel) {
+          const b = l.getBounds && l.getBounds();
+          if (b) bounds = bounds ? bounds.extend(b) : b;
+        }
+      });
+      if (bounds) map.fitBounds(bounds);
+    }
+
+    iniciar();
+  </script>
+</body>
+</html>
