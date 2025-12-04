@@ -22,6 +22,8 @@
       height: 100%;
       width: 100%;
     }
+
+    /* Painel padrão (desktop) */
     .panel {
       position: absolute;
       top: 10px;
@@ -65,12 +67,48 @@
       border: 1px solid #333;
       margin-right: 5px;
     }
+
+    /* Botão de toggle (mobile) */
+    #toggle-panel {
+      position: absolute;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1100;
+      padding: 8px 16px;
+      border-radius: 20px;
+      border: none;
+      background: #2c3e50;
+      color: #fff;
+      font-size: 14px;
+      cursor: pointer;
+      display: none; /* só aparece no mobile */
+    }
+
+    /* COMPORTAMENTO MOBILE */
+    @media (max-width: 768px) {
+      /* painel vai para baixo, em toda a largura */
+      .panel {
+        top: auto;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        max-width: none;
+        border-radius: 12px 12px 0 0;
+      }
+      #toggle-panel {
+        display: block;
+      }
+    }
   </style>
 </head>
 <body>
   <div id="map"></div>
 
-  <div class="panel">
+  <!-- Botão mobile para abrir/recolher o painel -->
+  <button id="toggle-panel">Filtros ↓</button>
+
+  <div class="panel" id="painel-filtros">
     <h4>Filtro de Supervisão</h4>
     <select id="filtro">
       <option value="">Todas</option>
@@ -83,7 +121,7 @@
   <script>
     /**************** CONFIG ****************/
     const WEBAPP_URL =
-      "https://script.google.com/macros/s/AKfycbzkTPjCUmRapObROd68_ar6LLynTv2zj3YCoulw2MP4fGsqOPAGyAuy6KL8TLKSPQVRIQ/exec";
+      "https://script.google.com/macros/s/AKfycbwnpVZijStuBl7uL1ONtJdP8or97kS0QKj8mQ111vbCNxeMOaBMvfXLI37F8XiKw2E/exec";
 
     const MUNICIPIOS_GEOJSON = "municipios-br.geojson";
 
@@ -388,6 +426,36 @@
       });
       if (bounds) map.fitBounds(bounds);
     }
+
+    /************* TOGGLE MOBILE DO PAINEL *************/
+    (function configurarToggleMobile() {
+      const painel = document.getElementById("painel-filtros");
+      const botao  = document.getElementById("toggle-panel");
+
+      if (!painel || !botao) return;
+
+      let visivel = true;
+
+      botao.addEventListener("click", () => {
+        visivel = !visivel;
+        painel.style.display = visivel ? "block" : "none";
+        botao.textContent = visivel ? "Fechar filtros ↓" : "Filtros ↑";
+      });
+
+      // garante que no desktop o painel sempre aparece
+      function ajustarPorTamanho() {
+        if (window.innerWidth > 768) {
+          painel.style.display = "block";
+          botao.style.display  = "none";
+        } else {
+          botao.style.display  = "block";
+          if (visivel) painel.style.display = "block";
+        }
+      }
+
+      window.addEventListener("resize", ajustarPorTamanho);
+      ajustarPorTamanho();
+    })();
 
     iniciar();
   </script>
