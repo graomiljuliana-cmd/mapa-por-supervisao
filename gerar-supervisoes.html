@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gerar GeoJSON de Supervisões</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body>
+  <h3>Gerando contornos das supervisões...</h3>
+  <pre id="log"></pre>
+
+  <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+  <script>
+    const WEBAPP_URL =
+      "https://script.google.com/macros/s/AKfycbwnpVZijStuBl7uL1ONtJdP8or97kS0QKj8mQ111vbCNxeMOaBMvfXLI37F8XiKw2E/exec";
+
+    const MUNICIPIOS_GEOJSON = "municipios-br.geojson";
+
+    const MUNICIPIOS_META_URL =
+      "https://raw.githubusercontent.com/kelvins/municipios-brasileiros/main/json/municipios.json";
+
+    const UF_MAP = {
+      11:"RO", 12:"AC", 13:"AM", 14:"RR", 15:"PA", 16:"AP", 17:"TO",
+      21:"MA", 22:"PI", 23:"CE", 24:"RN", 25:"PB", 26:"PE", 27:"AL", 28:"SE", 29:"BA",
+      31:"MG", 32:"ES", 33:"RJ", 35:"SP",
+      41:"PR", 42:"SC", 43:"RS",
+      50:"MS", 51:"MT", 52:"GO", 53:"DF"
+    };
+
+    let GEO_CITY_FIELD = null;
+    let GEO_UF_FIELD   = null;
+    let UF_POR_ID      = {};
+
+    const logEl = document.getElementById("log");
+    function log(msg) {
+      console.log(msg);
+      logEl.textContent += msg + "\n";
+    }
+
+    function normalizar(str) {
+      if (!str) return "";
+      return String(str)
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^A-Za-z0-9 ]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toUpperCase();
+    }
+
+    function chaveCidadeUF(c, u) {
+      return normalizar(c) + "|" + normalizar(u || "");
+    }
+
+    function detectarCamposCidadeUF(exemploProps) {
+      const keys = Object.keys(exemploProps);
+
+      for (const k of keys) {
+        const up = k.toUpperCase();
+        if (up.includes("UF") || up.includes("STATE")) {
+          GEO_UF_FIELD = k;
+          break;
+        }
+      }
+
+      const preferidos = ["NM_MUN","NM_MUNICIP","MUNICIP","MUNICIPIO","NOME","NAME"];
+      for (const pref of preferidos) {
+        const kFound = keys.find(k => k.toUpperCase() === pref);
+        if (kFound) {
+          GEO_CITY_FIELD = kFound;
+          break;
+        }
+      }
+      if (!GEO_CITY_FIELD) {
+        for (const k of keys) {
+          const v = exemploProps[k];
+          if (typeof v === "string" && k !== "id" && k.toLowerCase() !== "description") {
+            GEO_CITY_FIELD = k;
+            break;
+          }
+        }
+      }
+      log("Campos detectados: cidade=" + GEO_CITY_FIELD + " | uf=" + GEO_UF_FIELD);
+    }
+
+    function obterCidadeUF(props) {
+      const cidade = GEO_CITY_FIELD ? (props[GEO_CITY_FIELD] || "") : "";
+      let uf       = GEO_UF_FIELD   ? (props[GEO_UF_FIELD]   || "") : "";
+      if (!uf && props.id && UF_POR_ID[String(props.id)]) {
+        uf = UF_POR_ID[String(props.id)];
+      }
+      return { cidade, uf };
+    }
+
+    async function gerar() {
+      try {
+        log("Buscando dados da planilha...");
+        const dadosPlanilha = await fetch(WEBAPP_URL).then(r => r.json());
+        if (!Array.isArray(dadosPlanilha)) {
+          log("ERRO WebApp: " + JSON.stringify(dadosPlanilha));
+          return;
+        }
+
+        const cidadeParaSupervisao = {};
+        const supNormReal = {}; // supNorm -> nome original
+
+        dadosPlanilha.forEach(p => {
+          const cidadeNorm = normalizar(p.cidade);
+          const ufNorm     = normalizar(p.uf);
+          const sup        = p.supervisao;
+
+          if (!cidadeNorm || !ufNorm || !sup) return;
+
+          const chaveFull = cidadeNorm + "|" + ufNorm;
+          cidadeParaSupervisao[chaveFull] = sup;
+
+          const sNorm = normalizar(sup);
+          if (!supNormReal[sNorm]) supNormReal[sNorm] = sup;
+        });
+
+        log("Total de cidades (planilha): " + Object.keys(cidadeParaSupervisao).length);
+
+        log("Baixando metadados IBGE...");
+        const municipiosMeta = await fetch(MUNICIPIOS_META_URL).then(r => r.json());
+        UF_POR_ID = {};
+        municipiosMeta.forEach(m => {
+          const uf = UF_MAP[m.codigo_uf];
+          if (uf) UF_POR_ID[String(m.codigo_ibge)] = uf;
+        });
+        log("UF_POR_ID preenchido: " + Object.keys(UF_POR_ID).length);
+
+        log("Baixando GeoJSON de municípios...");
+        const geojson = await fetch(MUNICIPIOS_GEOJSON).then(r => r.json());
+        if (!geojson.features || !geojson.features.length) {
+          log("GeoJSON sem features.");
+          return;
+        }
+
+        detectarCamposCidadeUF(geojson.features[0].properties);
+
+        const featuresPorSup = {};
+        let contComSup = 0;
+
+        geojson.features.forEach(feat => {
+          const props = feat.properties || {};
+          const { cidade, uf } = obterCidadeUF(props);
+          const chave = chaveCidadeUF(cidade, uf);
+          const sup = cidadeParaSupervisao[chave];
+          if (!sup) return;
+
+          const supNorm = normalizar(sup);
+          contComSup++;
+
+          const fCopy = {
+            type: "Feature",
+            properties: { sup, supNorm },
+            geometry: feat.geometry
+          };
+
+          if (!featuresPorSup[supNorm]) featuresPorSup[supNorm] = [];
+          featuresPorSup[supNorm].push(fCopy);
+        });
+
+        log("Municípios com supervisão: " + contComSup);
+
+        if (!window.turf) {
+          log("Turf.js não carregado.");
+          return;
+        }
+
+        const outFeatures = [];
+
+        const supNorms = Object.keys(featuresPorSup);
+        log("Total de supervisões: " + supNorms.length);
+
+        // faz união por supervisão
+        supNorms.forEach(supNorm => {
+          const feats = featuresPorSup[supNorm];
+          log("Unindo supervisão: " + supNorm + " (" + feats.length + " municípios)");
+
+          let unionFeature = null;
+          feats.forEach((f, idx) => {
+            // opcional: simplificar para ficar ainda mais leve
+            const simplified = turf.simplify(f, { tolerance: 0.005, highQuality: false });
+
+            if (idx === 0) {
+              unionFeature = simplified;
+            } else {
+              unionFeature = turf.union(unionFeature, simplified);
+            }
+          });
+
+          if (unionFeature && unionFeature.geometry) {
+            unionFeature.properties = unionFeature.properties || {};
+            unionFeature.properties.supNorm = supNorm;
+            unionFeature.properties.supervisao = supNormReal[supNorm] || supNorm;
+            outFeatures.push(unionFeature);
+          }
+        });
+
+        const resultado = {
+          type: "FeatureCollection",
+          features: outFeatures
+        };
+
+        log("Total de features no GeoJSON final: " + outFeatures.length);
+
+        // gera download
+        const blob = new Blob([JSON.stringify(resultado)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "supervisoes.geojson";
+        a.click();
+        URL.revokeObjectURL(url);
+
+        log("✅ Arquivo supervisoes.geojson gerado e baixado.");
+      } catch (e) {
+        console.error(e);
+        log("ERRO: " + e.message);
+      }
+    }
+
+    gerar();
+  </script>
+</body>
+</html>
