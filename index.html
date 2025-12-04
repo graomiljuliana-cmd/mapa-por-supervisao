@@ -79,6 +79,8 @@
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Turf.js para unir polígonos por supervisão -->
+  <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
 
   <script>
     /**************** CONFIG ****************/
@@ -102,19 +104,22 @@
 
     let map;
     let layerMunicipios;
+    let layerSupOutlines;      // NOVA camada para contornos por supervisão
 
     // chaves "CIDADE|UF" -> supervisão
     let cidadeParaSupervisao = {};
 
-/*************** CORES COM MAIS CONTRASTE (NOVA) ***************/
-  const BASE_COLORS = [
-    "#e6194B", "#800000", "#ff0000", "#ffa500", "#ff7f00",
-    "#ffd700", "#b8860b", "#9acd32", "#32cd32", "#008000",
-    "#006400", "#00fa9a", "#40e0d0", "#00ced1", "#1e90ff",
-    "#0000ff", "#00008b", "#9932cc", "#8a2be2", "#ff00ff",
-    "#ff1493", "#c71585", "#ff69b4", "#ff4500", "#dc143c"
-  ];
+    // features agrupadas por supervisão normalizada (para fazer union)
+    let featuresPorSup = {};
 
+    /*************** CORES COM MAIS CONTRASTE (NOVA) ***************/
+    const BASE_COLORS = [
+      "#e6194B", "#800000", "#ff0000", "#ffa500", "#ff7f00",
+      "#ffd700", "#b8860b", "#9acd32", "#32cd32", "#008000",
+      "#006400", "#00fa9a", "#40e0d0", "#00ced1", "#1e90ff",
+      "#0000ff", "#00008b", "#9932cc", "#8a2be2", "#ff00ff",
+      "#ff1493", "#c71585", "#ff69b4", "#ff4500", "#dc143c"
+    ];
 
     // supNorm -> cor
     let supColorMap = {};
@@ -133,8 +138,8 @@
       });
     }
 
-    function corPara(sup) {
-      const key = normalizar(sup);
+    function corPara(supOuNorm) {
+      const key = normalizar(supOuNorm);
       return supColorMap[key] || "#999999";
     }
 
@@ -278,6 +283,9 @@
 
         let contComSup = 0;
 
+        // zera agrupamento
+        featuresPorSup = {};
+
         layerMunicipios = L.geoJSON(geojson, {
           // só desenha cidade presente na planilha (cidade+UF)
           filter: feat => {
@@ -289,15 +297,25 @@
             const sup = cidadeParaSupervisao[chave];
             if (!sup) return false;
 
+            const supNorm = normalizar(sup);
+
             feat.properties._sup = sup;
+            feat.properties._supNorm = supNorm;
             contComSup++;
+
+            // guarda feature por supervisão para depois fazer union dos polígonos
+            if (!featuresPorSup[supNorm]) {
+              featuresPorSup[supNorm] = [];
+            }
+            featuresPorSup[supNorm].push(feat);
+
             return true;
           },
           style: feat => {
             const sup = feat.properties._sup;
             const cor = corPara(sup);
             return {
-              // sem borda de município, só o “bloco” da supervisão
+              // blocos coloridos (municípios)
               stroke: false,
               color: cor,
               weight: 0,
@@ -311,14 +329,20 @@
             const sup = props._sup;
 
             layer._sup = sup || null;
+            layer._supNorm = props._supNorm || null;
 
             if (sup) {
-              layer.bindPopup(`<strong>${cidade}${uf ? " - " + uf : ""}</strong><br>Supervisão: ${sup}`);
+              layer.bindPopup(
+                `<strong>${cidade}${uf ? " - " + uf : ""}</strong><br>Supervisão: ${sup}`
+              );
             }
           }
         }).addTo(map);
 
         console.log("Municípios desenhados (com supervisão):", contComSup);
+
+        // 4) Cria camada de contornos unificados por supervisão
+        criarLayerContornosSupervisao();
 
         montarFiltroELegenda();
 
@@ -332,13 +356,65 @@
       }
     }
 
+    function criarLayerContornosSupervisao() {
+      if (!window.turf) {
+        console.warn("Turf.js não carregado, contornos unificados desativados.");
+        return;
+      }
+
+      layerSupOutlines = L.geoJSON(null, {
+        style: feat => {
+          const supNorm = feat.properties._supNorm;
+          const cor = corPara(supNorm);
+          return {
+            color: cor,
+            weight: 3,
+            fillOpacity: 0,
+            opacity: 1
+          };
+        }
+      }).addTo(map);
+
+      Object.entries(featuresPorSup).forEach(([supNorm, feats]) => {
+        if (!feats || !feats.length) return;
+
+        let unionFeature = null;
+
+        try {
+          // faz o union de todos os polígonos daquela supervisão
+          feats.forEach((f, idx) => {
+            const feat = {
+              type: "Feature",
+              properties: {},
+              geometry: f.geometry
+            };
+            if (idx === 0) {
+              unionFeature = feat;
+            } else {
+              unionFeature = turf.union(unionFeature, feat);
+            }
+          });
+
+          if (unionFeature && unionFeature.geometry) {
+            unionFeature.properties = unionFeature.properties || {};
+            unionFeature.properties._supNorm = supNorm;
+            layerSupOutlines.addData(unionFeature);
+          }
+        } catch (e) {
+          console.error("Erro ao unir polígonos da supervisão", supNorm, e);
+        }
+      });
+
+      console.log("Camada de contornos por supervisão criada.");
+    }
+
     function montarFiltroELegenda() {
       const select  = document.getElementById("filtro");
       const legenda = document.getElementById("legenda");
       const sups = new Set();
 
       layerMunicipios.eachLayer(l => {
-        if (l._sup) sups.add(normalizar(l._sup));
+        if (l._supNorm) sups.add(l._supNorm);
       });
 
       const lista = [...sups].sort();
@@ -394,12 +470,15 @@
     }
 
     function aplicarFiltro(supNorm) {
-      let bounds = null;
+      let boundsMun = null;
+      let boundsSup = null;
+
+      // controla visibilidade dos municípios (preenchimento)
       layerMunicipios.eachLayer(l => {
         const sup = l._sup;
         if (!sup) return;
 
-        const visivel = !supNorm || normalizar(sup) === supNorm;
+        const visivel = !supNorm || l._supNorm === supNorm;
 
         l.setStyle({
           opacity: visivel ? 1 : 0,
@@ -408,9 +487,32 @@
 
         if (visivel) {
           const b = l.getBounds && l.getBounds();
-          if (b) bounds = bounds ? bounds.extend(b) : b;
+          if (b) boundsMun = boundsMun ? boundsMun.extend(b) : b;
         }
       });
+
+      // controla visibilidade dos contornos unificados
+      if (layerSupOutlines) {
+        layerSupOutlines.eachLayer(l => {
+          const feat = l.feature || {};
+          const props = feat.properties || {};
+          const supN = props._supNorm || "";
+
+          const visivel = !supNorm || supN === supNorm;
+
+          l.setStyle({
+            opacity: visivel ? 1 : 0,
+            weight: visivel ? 3 : 0
+          });
+
+          if (visivel) {
+            const b = l.getBounds && l.getBounds();
+            if (b) boundsSup = boundsSup ? boundsSup.extend(b) : b;
+          }
+        });
+      }
+
+      const bounds = boundsSup || boundsMun;
       if (bounds) map.fitBounds(bounds);
     }
 
@@ -418,4 +520,3 @@
   </script>
 </body>
 </html>
-
