@@ -22,6 +22,7 @@
       height: 100%;
       width: 100%;
     }
+
     .panel {
       position: absolute;
       top: 10px;
@@ -37,6 +38,10 @@
     .panel h4 {
       margin: 0 0 6px 0;
       font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
     }
     .panel select {
       width: 100%;
@@ -65,13 +70,52 @@
       border: 1px solid #333;
       margin-right: 5px;
     }
+
+    /* Botão de minimizar/expandir (principalmente para mobile) */
+    #toggleLegend {
+      border: none;
+      background: #e9f6ef;
+      border-radius: 12px;
+      padding: 2px 8px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    /* Quando a legenda estiver recolhida */
+    .panel.collapsed select,
+    .panel.collapsed #legenda {
+      display: none;
+    }
+    .panel.collapsed {
+      padding-bottom: 6px;
+    }
+
+    /* --------- MODO MOBILE: legenda embaixo --------- */
+    @media (max-width: 768px) {
+      .panel {
+        left: 0;
+        right: 0;
+        bottom: 0;
+        top: auto;
+        max-width: none;
+        width: 100%;
+        border-radius: 12px 12px 0 0;
+      }
+      #legenda {
+        max-height: 180px;
+        overflow-y: auto;
+      }
+    }
   </style>
 </head>
 <body>
   <div id="map"></div>
 
-  <div class="panel">
-    <h4>Filtro de Supervisão</h4>
+  <div class="panel" id="panel">
+    <h4>
+      Filtro de Supervisão
+      <button id="toggleLegend">▼</button>
+    </h4>
     <select id="filtro">
       <option value="">Todas</option>
     </select>
@@ -104,7 +148,7 @@
 
     let map;
     let layerMunicipios;
-    let layerSupOutlines;      // NOVA camada para contornos por supervisão
+    let layerSupOutlines;      // camada para contornos por supervisão
 
     // chaves "CIDADE|UF" -> supervisão
     let cidadeParaSupervisao = {};
@@ -112,7 +156,7 @@
     // features agrupadas por supervisão normalizada (para fazer union)
     let featuresPorSup = {};
 
-    /*************** CORES COM MAIS CONTRASTE (NOVA) ***************/
+    /*************** CORES COM MAIS CONTRASTE ***************/
     const BASE_COLORS = [
       "#e6194B", "#800000", "#ff0000", "#ffa500", "#ff7f00",
       "#ffd700", "#b8860b", "#9acd32", "#32cd32", "#008000",
@@ -124,12 +168,11 @@
     // supNorm -> cor
     let supColorMap = {};
 
-    // distribui cores espaçando índices para aumentar contraste
     function buildSupColorMap(supListNorm) {
       const n = BASE_COLORS.length;
       if (n === 0) return;
 
-      const step = 7; // número coprimo ao tamanho típico da paleta
+      const step = 7;
       let idx = 0;
 
       supListNorm.forEach(supNorm => {
@@ -230,6 +273,14 @@
           maxZoom: 18
         }).addTo(map);
 
+        // Botão de minimizar legenda
+        const panel = document.getElementById("panel");
+        const toggleBtn = document.getElementById("toggleLegend");
+        toggleBtn.addEventListener("click", () => {
+          const collapsed = panel.classList.toggle("collapsed");
+          toggleBtn.textContent = collapsed ? "▲" : "▼";
+        });
+
         // 1) WebApp (planilha)
         const dadosPlanilha = await fetch(WEBAPP_URL).then(r => r.json());
         if (!Array.isArray(dadosPlanilha)) {
@@ -315,7 +366,6 @@
             const sup = feat.properties._sup;
             const cor = corPara(sup);
             return {
-              // blocos coloridos (municípios)
               stroke: false,
               color: cor,
               weight: 0,
@@ -356,61 +406,61 @@
       }
     }
 
-   function criarLayerContornosSupervisao() {
-  if (!window.turf) {
-    console.warn("Turf.js não carregado, contornos unificados desativados.");
-    return;
-  }
+    function criarLayerContornosSupervisao() {
+      if (!window.turf) {
+        console.warn("Turf.js não carregado, contornos unificados desativados.");
+        return;
+      }
 
-  layerSupOutlines = L.geoJSON(null, {
-    style: feat => {
-      const supNorm = feat.properties._supNorm;
-      const cor = corPara(supNorm);
-      return {
-        color: cor,
-        weight: 3,
-        fillOpacity: 0,
-        opacity: 1
-      };
-    },
-    // 👇 importante: contorno só visual, não captura clique
-    interactive: false
-  }).addTo(map);
+      layerSupOutlines = L.geoJSON(null, {
+        style: feat => {
+          const supNorm = feat.properties._supNorm;
+          const cor = corPara(supNorm);
+          return {
+            color: cor,
+            weight: 3,
+            fillOpacity: 0,
+            opacity: 1
+          };
+        },
+        // contorno só visual, não captura clique
+        interactive: false
+      }).addTo(map);
 
-  // opcional: joga o contorno para trás dos tiles, mas continua visível
-  layerSupOutlines.bringToBack();
+      // deixa atrás dos polígonos de município
+      layerSupOutlines.bringToBack();
 
-  Object.entries(featuresPorSup).forEach(([supNorm, feats]) => {
-    if (!feats || !feats.length) return;
+      Object.entries(featuresPorSup).forEach(([supNorm, feats]) => {
+        if (!feats || !feats.length) return;
 
-    let unionFeature = null;
+        let unionFeature = null;
 
-    try {
-      feats.forEach((f, idx) => {
-        const feat = {
-          type: "Feature",
-          properties: {},
-          geometry: f.geometry
-        };
-        if (idx === 0) {
-          unionFeature = feat;
-        } else {
-          unionFeature = turf.union(unionFeature, feat);
+        try {
+          feats.forEach((f, idx) => {
+            const feat = {
+              type: "Feature",
+              properties: {},
+              geometry: f.geometry
+            };
+            if (idx === 0) {
+              unionFeature = feat;
+            } else {
+              unionFeature = turf.union(unionFeature, feat);
+            }
+          });
+
+          if (unionFeature && unionFeature.geometry) {
+            unionFeature.properties = unionFeature.properties || {};
+            unionFeature.properties._supNorm = supNorm;
+            layerSupOutlines.addData(unionFeature);
+          }
+        } catch (e) {
+          console.error("Erro ao unir polígonos da supervisão", supNorm, e);
         }
       });
 
-      if (unionFeature && unionFeature.geometry) {
-        unionFeature.properties = unionFeature.properties || {};
-        unionFeature.properties._supNorm = supNorm;
-        layerSupOutlines.addData(unionFeature);
-      }
-    } catch (e) {
-      console.error("Erro ao unir polígonos da supervisão", supNorm, e);
+      console.log("Camada de contornos por supervisão criada.");
     }
-  });
-
-  console.log("Camada de contornos por supervisão criada.");
-}
 
     function montarFiltroELegenda() {
       const select  = document.getElementById("filtro");
@@ -524,4 +574,3 @@
   </script>
 </body>
 </html>
-
